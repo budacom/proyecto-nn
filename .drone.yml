@@ -1,0 +1,83 @@
+pipeline:
+  gcr:
+    image: plugins/gcr
+    registry: us.gcr.io
+    repo: ops-support-191021/bandiera
+    dry_run: true
+    purge: false
+    secrets: [ gcr_json_key ]
+    tags:
+      - ${CI_TAG=${CI_COMMIT_SHA}}
+    environment:
+      - DOCKER_HOST=tcp://docker:2375
+    when: &when_build
+      ref:
+        exclude: [ refs/tags/v*.* ]
+
+  push_image:
+    image: docker:18.06
+    environment:
+      - DOCKER_HOST=tcp://docker:2375
+      - IMAGE_TAG=${CI_TAG=${CI_COMMIT_SHA}}
+    secrets: [ gcr_json_key ]
+    commands:
+      - echo $GCR_JSON_KEY | base64 -d | docker login -u _json_key --password-stdin https://us.gcr.io
+      - "[ $$CI_BUILD_STATUS == 'failure' ] && IMAGE_TAG=$${IMAGE_TAG}-tests"
+      - docker push us.gcr.io/ops-support-191021/bandiera:$${IMAGE_TAG}
+    when:
+      <<: *when_build
+      status: [ success ]
+
+  push_image_tag:
+    image: us.gcr.io/ops-support-191021/hub:latest
+    pull: true
+    secrets: [ gcr_json_key ]
+    environment:
+      - GCLOUD_SERVICE_KEY_PATH=/tmp/service_account_key.json
+      - DOCKER_HOST=tcp://docker:2375
+      - IMAGE_TAG_PULL=${CI_COMMIT_SHA}
+      - IMAGE_TAG=${CI_TAG}
+    commands:
+      # Setup kubectl
+      - echo $GCR_JSON_KEY | base64 --decode > $GCLOUD_SERVICE_KEY_PATH
+      - SERVICE_ACCOUNT=`cat $GCLOUD_SERVICE_KEY_PATH | jq -r '.client_email'`
+      - gcloud auth activate-service-account $$SERVICE_ACCOUNT --key-file $GCLOUD_SERVICE_KEY_PATH
+
+      - gcloud container images add-tag --quiet us.gcr.io/ops-support-191021/bandiera:$${IMAGE_TAG_PULL} us.gcr.io/ops-support-191021/bandiera:$${IMAGE_TAG}
+    when:
+      event: tag
+      ref:
+        include: refs/tags/v*.*
+        exclude: refs/tags/v*.*-rc*
+
+  deploy:
+    image: gcr.io/hightowerlabs/hub
+    secrets: [ hub_config ]
+    environment:
+      - HUB_CONFIG_PATH=/root/.config/hub
+    commands:
+      # Set hub and git
+      - ACTIVE_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)")
+      - echo $HUB_CONFIG | base64 --decode > $HUB_CONFIG_PATH
+      - hub config --global credential.https://github.com.helper /usr/local/bin/hub-credential-helper
+      - hub config --global user.email "cicd@budadev.com"
+      - hub config --global user.name "Drone CD"
+      - unset HUB_CONFIG
+
+      # Clone infrastructure repository
+      - hub clone https://github.com/${CI_REPO}-infra.git infra
+      - cd infra
+
+      # Trigger deployment
+      - git branch "release/${CI_TAG=${CI_COMMIT_SHA}}"
+      - git push origin "release/${CI_TAG=${CI_COMMIT_SHA}}"
+    when:
+      event: [ tag, push ]
+      ref:
+        include: [ 'refs/tags/v*.*', 'refs/tags/stg-*.*', 'refs/heads/master' ]
+
+services:
+  docker:
+    image: docker:18.06-dind
+    storage-driver: overlay2
+    privileged: true

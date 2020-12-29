@@ -1,0 +1,44 @@
+version: '3'
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bandiera-dev
+    command: 'bundle exec shotgun -p 5050 -o 0.0.0.0 -s puma'
+    ports:
+      - '5050:5050'
+    stdin_open: true
+    tty: true
+    networks:
+      budadev:
+        aliases:
+          - bandiera
+      local:
+    depends_on:
+      - mysql
+    environment:
+      RACK_ENV: 'development'
+      DATABASE_URL: 'mysql2://root@mysql/bandiera'
+      LOG_TO_STDOUT: 'true'
+      RACK_CORS_ORIGINS: '*'
+
+  mysql:
+    image: mysql:5.6
+    ports:
+      - 3306
+    volumes:
+      - mysql_data:/var/lib/mysql
+    environment:
+      - MYSQL_ALLOW_EMPTY_PASSWORD=true
+      - MYSQL_DATABASE=bandiera
+    networks:
+      - local
+
+volumes:
+ mysql_data:
+
+networks:
+  budadev:
+    external: true
+  local:

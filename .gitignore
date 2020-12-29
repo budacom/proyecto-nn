@@ -1,0 +1,7 @@
+.bundle
+config/database.yml
+coverage*
+artifacts*
+.env
+newrelic_agent.log
+.idea
